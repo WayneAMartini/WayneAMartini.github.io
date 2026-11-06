@@ -352,13 +352,19 @@ function bindAdminSubmissionDetail() {
   document.getElementById("saveIdentity").onclick = () => { s.residentName = document.getElementById("residentName").value.trim(); s.residentInstitution = document.getElementById("residentInstitution").value.trim(); saveState(state); toast("Identity record saved.", "success"); render(); };
   document.getElementById("replace").onclick = () => {
     const revs = state.reviews.filter(r => r.submissionId === s.id);
-    const finals = revs.filter(r => r.status === "final").length, drafts = revs.filter(r => r.status === "draft").length;
+    const finalsAll = revs.filter(r => r.status === "final");
+    // Active-judge finals are the ONLY ones eligible for reopen on material change.
+    // Removed judges' evaluations stay locked exactly as the admin's prior decision left them.
+    const finalsActive = finalsAll.filter(r => { const j = state.judges.find(x => x.id === r.judgeId); return j && !j.removedAt; }).length;
+    const finalsRemoved = finalsAll.length - finalsActive;
+    const drafts = revs.filter(r => r.status === "draft").length;
     openModal({
       title: "Replace this PDF",
-      body: `<p>This submission has <strong>${finals} completed evaluations</strong> and <strong>${drafts} drafts</strong>. Replacing the PDF preserves the prior version in history.</p>
+      body: `<p>This submission has <strong>${finalsAll.length} completed evaluation${finalsAll.length===1?"":"s"}</strong> (${finalsActive} from active judges${finalsRemoved>0?`, ${finalsRemoved} from removed judge${finalsRemoved===1?"":"s"}`:""}) and <strong>${drafts} draft${drafts===1?"":"s"}</strong>. Replacing the PDF preserves the prior version in history.</p>
         <div class="field"><label class="field-label">New Google Drive share link (required)</label><input type="url" id="replUrl" placeholder="https://drive.google.com/file/d/.../view" /><div class="field-help">Current link: <code class="text-xs">${s.driveUrl}</code></div></div>
-        <div class="field"><label><input type="radio" name="repl" value="minor" /> <strong>Minor correction</strong>, don't reopen existing evaluations.</label></div>
-        <div class="field"><label><input type="radio" name="repl" value="material" /> <strong>Material change</strong>, reopen all ${finals} finalized evaluations for re-review.</label></div>
+        <div class="field"><label><input type="radio" name="repl" value="minor" /> <strong>Minor correction</strong>, don't reopen any existing evaluations.</label></div>
+        <div class="field"><label><input type="radio" name="repl" value="material" /> <strong>Material change</strong>, reopen the ${finalsActive} active-judge finalized evaluation${finalsActive===1?"":"s"} for re-review.</label></div>
+        ${finalsRemoved>0 ? `<div class="alert alert-info text-xs" style="margin:6px 0;">${finalsRemoved} finalized evaluation${finalsRemoved===1?"":"s"} from removed judge${finalsRemoved===1?"":"s"} will remain locked. Their scores stay <em>included</em> or <em>excluded</em> according to your earlier decision, regardless of this replacement.</div>` : ""}
         <div class="field"><label class="field-label">Reason (required)</label><textarea id="replReason" rows="3" placeholder="e.g. Corrected a typo in Table 2 that changed the reported sample size."></textarea></div>`,
       actions: [
         { label: "Cancel", kind: "ghost", onClick: closeModal },
@@ -380,10 +386,15 @@ function bindAdminSubmissionDetail() {
             s.version = (s.version || 1) + 1;
             s.driveUrl = newUrl;
             s.pdfVersions.push({ version: s.version, driveUrl: newUrl, replacedAt: null, replacedBy: null, reason: null, replacementKind: null });
-            // On material change, reopen every finalized review (preserving scores + comments)
+            // On material change, reopen ONLY active-judge finalized reviews (preserving scores + comments).
+            // Removed judges' reviews stay locked with their prior inclusion decision intact.
             let reopenedCount = 0;
             if (k.value === "material") {
-              state.reviews.filter(r => r.submissionId === s.id && r.status === "final").forEach(r => {
+              state.reviews.filter(r => {
+                if (r.submissionId !== s.id || r.status !== "final") return false;
+                const j = state.judges.find(x => x.id === r.judgeId);
+                return j && !j.removedAt;
+              }).forEach(r => {
                 r.status = "draft";
                 r.reopenedAt = new Date().toISOString();
                 r.reopenedBy = "Administrator (demo, via PDF replacement)";
@@ -393,7 +404,8 @@ function bindAdminSubmissionDetail() {
             }
             saveState(state); closeModal();
             toast("Replacement recorded (demo). Submission is now v" + s.version + ".", "success");
-            if (reopenedCount > 0) toast(reopenedCount + " finalized evaluation" + (reopenedCount===1?"":"s") + " reopened. Scores and comments preserved; judges can revise and resubmit.", "warn");
+            if (reopenedCount > 0) toast(reopenedCount + " active-judge evaluation" + (reopenedCount===1?"":"s") + " reopened. Scores and comments preserved; judges can revise and resubmit.", "warn");
+            if (k.value === "material" && finalsRemoved > 0) toast(finalsRemoved + " removed-judge evaluation" + (finalsRemoved===1?"":"s") + " left locked per your earlier decision.", "info");
             render();
         }}
       ]
