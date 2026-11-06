@@ -336,12 +336,68 @@ function bindAdminSubmissionDetail() {
   document.querySelectorAll("[data-go]").forEach(b => b.onclick = () => go(b.dataset.go));
   const s = state.submissions.find(x => x.id === state.ui.detailSubId);
   const ap = document.getElementById("approve"); if (ap) ap.onclick = () => { s.approved = true; saveState(state); toast("Approved.", "success"); render(); };
-  const un = document.getElementById("unapprove"); if (un) un.onclick = () => { s.approved = false; saveState(state); toast("Un-approved.", "warn"); render(); };
+  const un = document.getElementById("unapprove"); if (un) un.onclick = () => {
+    const finals = state.reviews.filter(r => r.submissionId === s.id && r.status === "final").length;
+    const drafts = state.reviews.filter(r => r.submissionId === s.id && r.status === "draft").length;
+    const hasWork = finals > 0 || drafts > 0;
+    openModal({
+      title: "Un-approve #" + pad3(s.number) + "?",
+      body: `<p>Un-approving removes this submission from every judge's dashboard and temporarily excludes it from Rankings and Excel exports.</p>${hasWork ? `<div class="alert alert-warn"><strong>${finals} finalized evaluation${finals===1?"":"s"}</strong> and <strong>${drafts} draft${drafts===1?"":"s"}</strong> already exist for this submission. These are preserved in the records. When you re-approve, all existing scores and comments return exactly as they were.</div>` : ""}<p class="text-xs text-mut">Judges will not see this submission while it is un-approved. If they had it open, they will no longer be able to save or submit against it until it is re-approved.</p>`,
+      actions: [
+        { label: "Cancel", kind: "ghost", onClick: closeModal },
+        { label: "Un-approve", kind: "danger", onClick: () => { s.approved = false; saveState(state); closeModal(); toast("#" + pad3(s.number) + " un-approved. Existing evaluations preserved.", "warn"); render(); } }
+      ]
+    });
+  };
   document.getElementById("saveIdentity").onclick = () => { s.residentName = document.getElementById("residentName").value.trim(); s.residentInstitution = document.getElementById("residentInstitution").value.trim(); saveState(state); toast("Identity record saved.", "success"); render(); };
   document.getElementById("replace").onclick = () => {
     const revs = state.reviews.filter(r => r.submissionId === s.id);
     const finals = revs.filter(r => r.status === "final").length, drafts = revs.filter(r => r.status === "draft").length;
-    openModal({ title: "Replace this PDF", body: `<p>This submission has <strong>${finals} completed evaluations</strong> and <strong>${drafts} drafts</strong>. Replacing the PDF preserves the prior version in history. Choose:</p><div class="field"><label><input type="radio" name="repl" value="minor" /> Minor correction, don't reopen existing evaluations.</label></div><div class="field"><label><input type="radio" name="repl" value="material" /> Material change, reopen all ${finals} finalized evaluations for re-review.</label></div><div class="field"><label class="field-label">Reason (required)</label><textarea id="replReason" rows="3"></textarea></div>`, actions: [{ label: "Cancel", kind: "ghost", onClick: closeModal }, { label: "Record", kind: "primary", onClick: () => { const k = document.querySelector("input[name=repl]:checked"); const rsn = document.getElementById("replReason").value.trim(); if (!k) return toast("Pick minor or material.", "warn"); if (!rsn) return toast("Reason required.", "warn"); s.version = (s.version || 1) + 1; saveState(state); closeModal(); toast("Replacement recorded (demo). v" + s.version, "success"); if (k.value === "material") toast(finals + " finalized evaluations marked for reopen.", "warn"); render(); } }] });
+    openModal({
+      title: "Replace this PDF",
+      body: `<p>This submission has <strong>${finals} completed evaluations</strong> and <strong>${drafts} drafts</strong>. Replacing the PDF preserves the prior version in history.</p>
+        <div class="field"><label class="field-label">New Google Drive share link (required)</label><input type="url" id="replUrl" placeholder="https://drive.google.com/file/d/.../view" /><div class="field-help">Current link: <code class="text-xs">${s.driveUrl}</code></div></div>
+        <div class="field"><label><input type="radio" name="repl" value="minor" /> <strong>Minor correction</strong>, don't reopen existing evaluations.</label></div>
+        <div class="field"><label><input type="radio" name="repl" value="material" /> <strong>Material change</strong>, reopen all ${finals} finalized evaluations for re-review.</label></div>
+        <div class="field"><label class="field-label">Reason (required)</label><textarea id="replReason" rows="3" placeholder="e.g. Corrected a typo in Table 2 that changed the reported sample size."></textarea></div>`,
+      actions: [
+        { label: "Cancel", kind: "ghost", onClick: closeModal },
+        { label: "Record replacement", kind: "primary", onClick: () => {
+            const newUrl = document.getElementById("replUrl").value.trim();
+            const k = document.querySelector("input[name=repl]:checked");
+            const rsn = document.getElementById("replReason").value.trim();
+            if (!newUrl) return toast("New Drive link is required.", "warn");
+            if (!/drive\.google\.com\/file\/d\//.test(newUrl) && !/drive\.google\.com\/open\?id=/.test(newUrl)) return toast("That doesn't look like a Drive share link.", "warn");
+            if (!k) return toast("Choose minor or material.", "warn");
+            if (!rsn) return toast("Reason is required.", "warn");
+            // Push prior version into history
+            if (!s.pdfVersions) s.pdfVersions = [{ version: s.version || 1, driveUrl: s.driveUrl, replacedAt: null, replacedBy: null, reason: null, replacementKind: null }];
+            const prior = s.pdfVersions[s.pdfVersions.length - 1];
+            prior.replacedAt = new Date().toISOString();
+            prior.replacedBy = "Administrator (demo)";
+            prior.reason = rsn;
+            prior.replacementKind = k.value;
+            s.version = (s.version || 1) + 1;
+            s.driveUrl = newUrl;
+            s.pdfVersions.push({ version: s.version, driveUrl: newUrl, replacedAt: null, replacedBy: null, reason: null, replacementKind: null });
+            // On material change, reopen every finalized review (preserving scores + comments)
+            let reopenedCount = 0;
+            if (k.value === "material") {
+              state.reviews.filter(r => r.submissionId === s.id && r.status === "final").forEach(r => {
+                r.status = "draft";
+                r.reopenedAt = new Date().toISOString();
+                r.reopenedBy = "Administrator (demo, via PDF replacement)";
+                r.reopenReason = "PDF replaced with a material change: " + rsn;
+                reopenedCount++;
+              });
+            }
+            saveState(state); closeModal();
+            toast("Replacement recorded (demo). Submission is now v" + s.version + ".", "success");
+            if (reopenedCount > 0) toast(reopenedCount + " finalized evaluation" + (reopenedCount===1?"":"s") + " reopened. Scores and comments preserved; judges can revise and resubmit.", "warn");
+            render();
+        }}
+      ]
+    });
   };
   document.querySelectorAll("[data-reopen]").forEach(btn => btn.onclick = () => reopenReview(btn.dataset.reopen));
 }
