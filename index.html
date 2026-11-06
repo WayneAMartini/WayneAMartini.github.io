@@ -104,6 +104,18 @@
     .status-block { display: flex; flex-direction: column; gap: 6px; }
     .status-label { font-size: 11px; color: var(--stone-500); text-transform: uppercase; letter-spacing: .1em; font-weight: 600; }
     @media (max-width: 520px) { .status-row { grid-template-columns: 1fr; gap: 16px; } }
+    /* Judge dashboard — desktop table vs mobile cards */
+    .judge-mobile { display: none; }
+    .judge-desktop { display: block; }
+    .judge-card { background: #fff; border: 1px solid var(--stone-200); border-radius: 12px; padding: 16px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 10px; }
+    .judge-card-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    .judge-card-num { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 600; color: var(--acep-deep); }
+    .judge-card-title { font-size: 15px; line-height: 1.35; margin: 0; color: var(--ink); font-weight: 600; font-family: 'Inter', sans-serif; }
+    .btn-fullwidth { display: block; width: 100%; padding: 12px 16px; font-size: 14px; text-align: center; box-sizing: border-box; }
+    @media (max-width: 720px) {
+      .judge-mobile { display: block; }
+      .judge-desktop { display: none; }
+    }
     /* Help tooltip */
     .help { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: var(--stone-500); color: #fff; font-size: 9px; font-weight: 700; font-family: 'Inter', sans-serif; margin-left: 5px; cursor: help; position: relative; text-transform: none; letter-spacing: 0; }
     .help:hover { background: var(--acep); }
@@ -591,8 +603,41 @@ function judgeDashboard() {
   const canEdit = st === "open";
   const closedBanner = st === "closed" ? `<div class="alert alert-warn"><strong>Judging is closed.</strong> You can view your submitted evaluations but can no longer modify or submit new ones. Contact AzCEP admin if changes are needed.</div>` : "";
   const setupBanner = st === "setup" ? `<div class="alert alert-warn"><strong>Judging has not started yet.</strong> You will be able to view and evaluate submissions once the administrator opens the competition.</div>` : "";
-  const rows = subs.map(s => { const r = state.reviews.find(x => x.judgeId === j.id && x.submissionId === s.id); let sp = `<span class="pill pill-status-not">Not started</span>`; if (r && r.status === "draft") sp = `<span class="pill pill-status-progress">In progress</span>`; if (r && r.status === "final") sp = `<span class="pill pill-status-complete">Completed</span>`; const openLabel = (!canEdit) ? "View evaluation" : (r && r.status==="final" ? "View submitted" : "Open evaluation"); return `<tr><td><strong>#${pad3(s.number)}</strong></td><td><strong>${s.title}</strong></td><td>${sp}</td><td><a href="${s.driveUrl}" target="_blank" rel="noreferrer" class="btn btn-sm btn-ghost">View research paper</a></td><td><button class="btn btn-sm btn-primary" data-sub="${s.id}">${openLabel}</button></td></tr>`; }).join("");
-  return `<h1 style="margin-bottom:8px;">Your dashboard</h1><p class="text-mut text-sm" style="margin-bottom:12px;">${state.competition.name} &middot; deadline ${state.competition.deadline} &middot; status <span class="pill pill-${st}">${st}</span></p>${setupBanner}${closedBanner}${canEdit ? `<div class="alert alert-info">Scoring scale: <strong>1 = poorly supports, 5 = strongly supports</strong>. All six categories required to finalize.</div>` : ""}<div class="card"><table><thead><tr><th>#</th><th>Project title</th><th>Status</th><th>Research paper</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  // Helper: pick evaluation button label by status + whether we can still edit
+  const evalLabel = (r) => {
+    if (!canEdit) return "View evaluation";
+    if (!r || r.status === undefined) return "Start evaluation";
+    if (r.status === "draft") return "Continue evaluation";
+    if (r.status === "final") return "View submitted evaluation";
+    return "Open evaluation";
+  };
+  const statusPill = (r) => {
+    if (r && r.status === "draft") return `<span class="pill pill-status-progress">In progress</span>`;
+    if (r && r.status === "final") return `<span class="pill pill-status-complete">Completed</span>`;
+    return `<span class="pill pill-status-not">Not started</span>`;
+  };
+
+  // Desktop table rows (hidden on mobile via CSS)
+  const rows = subs.map(s => {
+    const r = state.reviews.find(x => x.judgeId === j.id && x.submissionId === s.id);
+    return `<tr><td><strong>#${pad3(s.number)}</strong></td><td><strong>${s.title}</strong></td><td>${statusPill(r)}</td><td><a href="${s.driveUrl}" target="_blank" rel="noreferrer" class="btn btn-sm btn-ghost">View research paper</a></td><td><button class="btn btn-sm btn-primary" data-sub="${s.id}">${evalLabel(r)}</button></td></tr>`;
+  }).join("");
+
+  // Mobile card layout (hidden on desktop via CSS)
+  const cards = subs.map(s => {
+    const r = state.reviews.find(x => x.judgeId === j.id && x.submissionId === s.id);
+    return `<div class="judge-card">
+      <div class="judge-card-header">
+        <span class="judge-card-num">#${pad3(s.number)}</span>
+        ${statusPill(r)}
+      </div>
+      <h3 class="judge-card-title">${s.title}</h3>
+      <a href="${s.driveUrl}" target="_blank" rel="noreferrer" class="btn btn-ghost btn-fullwidth">View research paper</a>
+      <button class="btn btn-primary btn-fullwidth" data-sub="${s.id}">${evalLabel(r)}</button>
+    </div>`;
+  }).join("");
+
+  return `<h1 style="margin-bottom:8px;">Your dashboard</h1><p class="text-mut text-sm" style="margin-bottom:12px;">${state.competition.name} &middot; deadline ${state.competition.deadline} &middot; status <span class="pill pill-${st}">${st}</span></p>${setupBanner}${closedBanner}${canEdit ? `<div class="alert alert-info">Scoring scale: <strong>1 = poorly supports, 5 = strongly supports</strong>. All six categories required to finalize.</div>` : ""}<div class="card judge-desktop"><table><thead><tr><th>#</th><th>Project title</th><th>Status</th><th>Research paper</th><th></th></tr></thead><tbody>${rows}</tbody></table></div><div class="judge-mobile">${cards}</div>`;
 }
 function bindJudgeDashboard() { document.querySelectorAll("[data-sub]").forEach(b => b.onclick = () => { state.ui.evalSubId = b.dataset.sub; go("judge-evaluate"); }); }
 function judgeEvaluate() {
