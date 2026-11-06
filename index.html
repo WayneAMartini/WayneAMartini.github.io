@@ -367,13 +367,14 @@ function reopenReview(reviewId) {
   });
 }
 function adminJudges() {
-  const rows = state.judges.map(j => { const my = state.reviews.filter(r => r.judgeId === j.id); const f = my.filter(r => r.status === "final").length, d = my.filter(r => r.status === "draft").length, t = state.submissions.filter(s => s.approved).length; return `<tr><td><strong>${j.code}</strong></td><td>${j.name}<div class="text-xs text-mut">${j.email}</div></td><td>${j.removedAt ? `<span class="pill pill-closed">Removed ${j.removedAt}</span> ${j.includeScoresAfterRemoval ? '<span class="text-xs">(scores included)</span>' : '<span class="text-xs">(scores excluded)</span>'}` : `<span class="pill pill-open">Active</span>`}</td><td class="text-xs">Invited ${j.invitedAt}</td><td class="text-xs">${f} / ${t} final${d ? ` &middot; ${d} drafts` : ""}</td><td class="text-right">${!j.removedAt ? `<button class="btn btn-sm btn-ghost" data-invite="${j.id}">Resend invite</button> <button class="btn btn-sm btn-danger" data-remove="${j.id}">Remove</button>` : `<button class="btn btn-sm btn-ghost" data-restore="${j.id}">Restore</button>`}</td></tr>`; }).join("");
+  const rows = state.judges.map(j => { const my = state.reviews.filter(r => r.judgeId === j.id); const f = my.filter(r => r.status === "final").length, d = my.filter(r => r.status === "draft").length, t = state.submissions.filter(s => s.approved).length; const incPill = j.removedAt ? (j.includeScoresAfterRemoval ? `<span class="pill pill-open" style="margin-left:4px;">Scores included</span>` : `<span class="pill pill-closed" style="margin-left:4px;">Scores excluded</span>`) : ""; const removedActions = `<button class="btn btn-sm btn-ghost" data-toggle-inclusion="${j.id}">Change inclusion</button> <button class="btn btn-sm btn-ghost" data-restore="${j.id}">Restore</button>`; const activeActions = `<button class="btn btn-sm btn-ghost" data-invite="${j.id}">Resend invite</button> <button class="btn btn-sm btn-danger" data-remove="${j.id}">Remove</button>`; return `<tr><td><strong>${j.code}</strong></td><td>${j.name}<div class="text-xs text-mut">${j.email}</div></td><td>${j.removedAt ? `<span class="pill pill-closed">Removed ${j.removedAt}</span>${incPill}` : `<span class="pill pill-open">Active</span>`}</td><td class="text-xs">Invited ${j.invitedAt}</td><td class="text-xs">${f} / ${t} final${d ? ` &middot; ${d} drafts` : ""}</td><td class="text-right">${j.removedAt ? removedActions : activeActions}</td></tr>`; }).join("");
   return `<h1 style="margin-bottom:8px;">Judges</h1><p class="text-mut text-sm" style="margin-bottom:24px;">${activeJudges().length} active, ${state.judges.length - activeJudges().length} removed. Judge codes are stable and never recycled.</p><div class="card"><h2>Assign a new judge</h2><div class="card-sub">Pick from member roster (demo) and allocate the next judge code.</div><form id="newJudgeForm"><div class="field"><label class="field-label">Full name</label><input type="text" id="newJudgeName" required placeholder="Dr. Jane Reviewer" /></div><div class="field"><label class="field-label">Email (Google account for Drive sharing)</label><input type="email" id="newJudgeEmail" required placeholder="j.reviewer@example.com" /></div><div class="flex gap-2"><button type="submit" class="btn btn-primary">Assign (no invite yet)</button><button type="button" class="btn btn-ghost" id="assignAndInvite">Assign + send invite</button></div></form></div><div class="card"><h2>Current judging panel</h2><table><thead><tr><th>Code</th><th>Judge</th><th>Status</th><th>Invited</th><th>Progress</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 function bindAdminJudges() {
   document.querySelectorAll("[data-remove]").forEach(b => b.onclick = () => removeJudge(b.dataset.remove));
   document.querySelectorAll("[data-restore]").forEach(b => b.onclick = () => restoreJudge(b.dataset.restore));
   document.querySelectorAll("[data-invite]").forEach(b => b.onclick = () => toast("Invite email queued (demo).", "success"));
+  document.querySelectorAll("[data-toggle-inclusion]").forEach(b => b.onclick = () => changeInclusion(b.dataset["toggleInclusion"]));
   const create = (invite) => { const name = document.getElementById("newJudgeName").value.trim(), em = document.getElementById("newJudgeEmail").value.trim(); if (!name || !em) return; const nc = Math.max(0, ...state.judges.map(j => parseInt(j.code.slice(1)))) + 1; state.judges.push({ id: "j" + (state.judges.length + 1), code: "J" + String(nc).padStart(2, "0"), name, email: em, invitedAt: new Date().toISOString().slice(0, 10), removedAt: null, includeScoresAfterRemoval: null }); saveState(state); toast((invite ? "Assigned + invite queued" : "Assigned") + " (demo).", "success"); render(); };
   document.getElementById("newJudgeForm").onsubmit = (e) => { e.preventDefault(); create(false); };
   document.getElementById("assignAndInvite").onclick = () => create(true);
@@ -381,13 +382,65 @@ function bindAdminJudges() {
 function removeJudge(id) {
   const j = state.judges.find(x => x.id === id);
   const mf = state.reviews.filter(r => r.judgeId === id && r.status === "final").length;
-  openModal({ title: "Remove " + j.name + "?", body: `<p>This judge has <strong>${mf} finalized evaluations</strong>. They will be preserved either way. Include their scores in the official results?</p><div class="field"><label><input type="radio" name="inc" value="yes" checked /> Include their scores.</label></div><div class="field"><label><input type="radio" name="inc" value="no" /> Exclude their scores.</label></div><div class="alert alert-warn">Portal access is revoked immediately. You must also revoke Drive access manually.</div>`, actions: [{ label: "Cancel", kind: "ghost", onClick: closeModal }, { label: "Remove", kind: "danger", onClick: () => { const inc = document.querySelector("input[name=inc]:checked").value; j.removedAt = new Date().toISOString().slice(0, 10); j.includeScoresAfterRemoval = inc === "yes"; saveState(state); closeModal(); toast(j.name + " removed.", "warn"); render(); } }] });
+  openModal({
+    title: "Remove " + j.name + "?",
+    body: `<p>This judge has <strong>${mf} finalized evaluations</strong>. They will be preserved in the admin records either way. Choose how their scores are handled in the official competition results:</p>
+      <div class="field"><label style="display:flex; gap:8px; align-items:flex-start; cursor:pointer;"><input type="radio" name="inc" value="yes" checked style="margin-top:3px; width:auto;"/><span><strong>Remove judge and keep scores</strong><br/><span class="text-xs text-mut">Finalized evaluations continue to count toward averages and rankings.</span></span></label></div>
+      <div class="field"><label style="display:flex; gap:8px; align-items:flex-start; cursor:pointer;"><input type="radio" name="inc" value="no" style="margin-top:3px; width:auto;"/><span><strong>Remove judge and exclude scores</strong><br/><span class="text-xs text-mut">Evaluations stay in records but no longer count toward averages or rankings.</span></span></label></div>
+      <div class="field"><label class="field-label">Reason (required)</label><textarea id="remReason" rows="2" placeholder="e.g. Conflict of interest disclosed after initial reviews."></textarea></div>
+      <div class="alert alert-warn">Portal access is revoked immediately. You must also revoke Drive folder access manually, Drive sharing is not managed by this portal.</div>`,
+    actions: [
+      { label: "Cancel", kind: "ghost", onClick: closeModal },
+      { label: "Remove judge", kind: "danger", onClick: () => {
+          const inc = document.querySelector("input[name=inc]:checked").value;
+          const reason = document.getElementById("remReason").value.trim();
+          if (!reason) return toast("Reason is required.", "warn");
+          j.removedAt = new Date().toISOString().slice(0, 10);
+          j.includeScoresAfterRemoval = inc === "yes";
+          j.removalReason = reason;
+          if (!j.inclusionHistory) j.inclusionHistory = [];
+          j.inclusionHistory.push({ at: new Date().toISOString(), by: "Administrator (demo)", action: "removed_" + inc, reason });
+          saveState(state); closeModal();
+          toast(j.name + " removed, scores " + (inc === "yes" ? "included" : "excluded") + ". Remember to revoke their Drive access.", "warn");
+          render();
+      }}
+    ]
+  });
 }
-function restoreJudge(id) { const j = state.judges.find(x => x.id === id); j.removedAt = null; j.includeScoresAfterRemoval = null; saveState(state); toast(j.name + " restored.", "success"); render(); }
+function changeInclusion(id) {
+  const j = state.judges.find(x => x.id === id);
+  if (!j || !j.removedAt) return;
+  const current = j.includeScoresAfterRemoval;
+  const mf = state.reviews.filter(r => r.judgeId === id && r.status === "final").length;
+  openModal({
+    title: "Change score-inclusion decision for " + j.name + "?",
+    body: `<p>${j.name} (${j.code}) was removed on ${j.removedAt}. Currently their <strong>${mf} finalized evaluations</strong> are <strong>${current ? "INCLUDED" : "EXCLUDED"}</strong> from the official results.</p>
+      <div class="field"><label style="display:flex; gap:8px; align-items:flex-start; cursor:pointer;"><input type="radio" name="newInc" value="yes" ${current ? "checked" : ""} style="margin-top:3px; width:auto;"/><span><strong>Include their scores</strong><br/><span class="text-xs text-mut">Averages and rankings will recompute with these totals counted.</span></span></label></div>
+      <div class="field"><label style="display:flex; gap:8px; align-items:flex-start; cursor:pointer;"><input type="radio" name="newInc" value="no" ${!current ? "checked" : ""} style="margin-top:3px; width:auto;"/><span><strong>Exclude their scores</strong><br/><span class="text-xs text-mut">Averages and rankings will recompute without these totals.</span></span></label></div>
+      <div class="field"><label class="field-label">Reason for the change (required)</label><textarea id="incReason" rows="2" placeholder="e.g. Chair ruled the original removal reason does not warrant excluding prior reviews."></textarea></div>
+      <div class="alert alert-info">This change is logged in the audit record with your reason. Rankings and exports update immediately.</div>`,
+    actions: [
+      { label: "Cancel", kind: "ghost", onClick: closeModal },
+      { label: "Save change", kind: "primary", onClick: () => {
+          const next = document.querySelector("input[name=newInc]:checked").value === "yes";
+          const reason = document.getElementById("incReason").value.trim();
+          if (!reason) return toast("Reason is required.", "warn");
+          if (next === current) return toast("No change selected.", "warn");
+          j.includeScoresAfterRemoval = next;
+          if (!j.inclusionHistory) j.inclusionHistory = [];
+          j.inclusionHistory.push({ at: new Date().toISOString(), by: "Administrator (demo)", action: "inclusion_change_to_" + (next ? "included" : "excluded"), reason });
+          saveState(state); closeModal();
+          toast(j.name + "'s scores are now " + (next ? "included" : "excluded") + " in results.", "success");
+          render();
+      }}
+    ]
+  });
+}
+function restoreJudge(id) { const j = state.judges.find(x => x.id === id); j.removedAt = null; j.includeScoresAfterRemoval = null; j.removalReason = null; saveState(state); toast(j.name + " restored. They can access the portal again.", "success"); render(); }
 function adminScoring() {
   const subs = state.submissions.filter(s => s.approved);
   const ranked = rankingRows();
-  const rows = state.judges.map(j => { const cells = subs.map(s => { const r = state.reviews.find(x => x.judgeId === j.id && x.submissionId === s.id); if (!r || r.status !== "final") return `<td class="num text-mut">—</td>`; const tot = totalFromScores(r); const { excluded } = computeAverages(s.id); const ex = excluded.includes(r.id) && (!j.removedAt || j.includeScoresAfterRemoval === true); return `<td class="num ${ex ? 'excluded' : ''}">${tot}</td>`; }).join(""); return `<tr><td>${j.name} <span class="text-xs text-mut">(${j.code})${j.removedAt ? " · removed" : ""}</span></td>${cells}</tr>`; }).join("");
+  const rows = state.judges.map(j => { const cells = subs.map(s => { const r = state.reviews.find(x => x.judgeId === j.id && x.submissionId === s.id); if (!r || r.status !== "final") return `<td class="num text-mut">—</td>`; const tot = totalFromScores(r); const { excluded } = computeAverages(s.id); const ex = excluded.includes(r.id) && (!j.removedAt || j.includeScoresAfterRemoval === true); const scoreStyle = (j.removedAt && !j.includeScoresAfterRemoval) ? " style=\"text-decoration:line-through; opacity:.55;\"" : ""; return `<td class="num ${ex ? 'excluded' : ''}"${scoreStyle}>${tot}</td>`; }).join(""); const removedLabel = j.removedAt ? ` <span class="pill ${j.includeScoresAfterRemoval ? 'pill-setup' : 'pill-closed'}" style="font-size:9px; margin-left:4px;">Removed · scores ${j.includeScoresAfterRemoval ? 'included' : 'excluded'}</span>` : ""; const rowStyle = (j.removedAt && !j.includeScoresAfterRemoval) ? ' style="background:var(--stone-100);"' : ""; return `<tr${rowStyle}><td>${j.name} <span class="text-xs text-mut">(${j.code})</span>${removedLabel}</td>${cells}</tr>`; }).join("");
   const sumsRow = subs.map(s => { const incl = includedReviews(s.id); const sum = incl.reduce((a, r) => a + totalFromScores(r), 0); return `<td class="num"><strong>${sum}</strong></td>`; }).join("");
   const avgRow = subs.map(s => { const { avg } = computeAverages(s.id); return `<td class="num"><strong>${avg == null ? "—" : avg.toFixed(2)}</strong></td>`; }).join("");
   const trimRow = subs.map(s => { const { trimmed } = computeAverages(s.id); return `<td class="num yellow-cell"><strong>${trimmed == null ? "— (need 3+)" : trimmed.toFixed(2)}</strong></td>`; }).join("");
@@ -463,13 +516,13 @@ async function exportExcel() {
   const s1 = wb.addWorksheet("Total Scores by Judge");
   s1.addRow(["RESIDENT RESEARCH EVALS, " + CURRENT_YEAR + " — Totals /30"]); s1.getCell("A1").font = { bold: true, size: 14, color: { argb: "FF002B63" } }; s1.mergeCells(1, 1, 1, subs.length + 1); s1.addRow([]);
   s1.addRow(["Judge", ...subs.map(s => "#" + pad3(s.number))]).eachCell(c => Object.assign(c, HDR));
-  judges.forEach(j => { const row = [j.name + (j.removedAt ? " (removed)" : "")]; subs.forEach(s => { const r = state.reviews.find(x => x.judgeId === j.id && x.submissionId === s.id); row.push(r && r.status === "final" ? totalFromScores(r) : ""); }); s1.addRow(row); });
+  judges.forEach(j => { const label = j.removedAt ? j.name + " (REMOVED, scores " + (j.includeScoresAfterRemoval ? "included" : "excluded") + ")" : j.name; const row = [label]; subs.forEach(s => { const r = state.reviews.find(x => x.judgeId === j.id && x.submissionId === s.id); row.push(r && r.status === "final" ? totalFromScores(r) : ""); }); s1.addRow(row); });
   s1.getColumn(1).width = 30; for (let c = 2; c <= subs.length + 1; c++) s1.getColumn(c).width = 10; s1.views = [{ state: "frozen", xSplit: 1, ySplit: 3 }];
   const s2 = wb.addWorksheet("Submission Score Breakdown");
   s2.addRow(["RESIDENT RESEARCH EVALS, " + CURRENT_YEAR]); s2.getCell("A1").font = { bold: true, size: 14, color: { argb: "FF002B63" } }; s2.mergeCells(1, 1, 1, subs.length + 1); s2.addRow([]);
   s2.addRow(["Judge", ...subs.map(s => "#" + pad3(s.number))]).eachCell(c => Object.assign(c, HDR));
   const excl = {}; subs.forEach((s, i) => excl[i] = computeAverages(s.id).excluded);
-  judges.forEach(j => { const row = [j.name + (j.removedAt ? " (removed)" : "")]; subs.forEach(s => { const r = state.reviews.find(x => x.judgeId === j.id && x.submissionId === s.id); row.push(r && r.status === "final" ? totalFromScores(r) : ""); }); const a = s2.addRow(row); subs.forEach((s, i) => { const r = state.reviews.find(x => x.judgeId === j.id && x.submissionId === s.id); if (!r || r.status !== "final") return; if (excl[i].includes(r.id) && (!j.removedAt || j.includeScoresAfterRemoval === true)) a.getCell(i + 2).fill = YEL; }); });
+  judges.forEach(j => { const label = j.removedAt ? j.name + " (REMOVED, scores " + (j.includeScoresAfterRemoval ? "included" : "excluded") + ")" : j.name; const row = [label]; subs.forEach(s => { const r = state.reviews.find(x => x.judgeId === j.id && x.submissionId === s.id); row.push(r && r.status === "final" ? totalFromScores(r) : ""); }); const a = s2.addRow(row); subs.forEach((s, i) => { const r = state.reviews.find(x => x.judgeId === j.id && x.submissionId === s.id); if (!r || r.status !== "final") return; if (excl[i].includes(r.id) && (!j.removedAt || j.includeScoresAfterRemoval === true)) a.getCell(i + 2).fill = YEL; }); });
   s2.addRow([]);
   s2.addRow(["Sum", ...subs.map(s => includedReviews(s.id).reduce((a, r) => a + totalFromScores(r), 0))]).eachCell(c => c.font = BOLD);
   s2.addRow(["Average", ...subs.map(s => { const a = computeAverages(s.id).avg; return a == null ? "" : Number(a.toFixed(2)); })]).eachCell(c => c.font = BOLD);
